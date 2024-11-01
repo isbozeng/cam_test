@@ -44,6 +44,10 @@ int main(int argc, char* argv[]) {
         std::cerr << "无法读取帧" << std::endl;
         return -1;
     }
+    std::cout << "Channels: " << frame.channels() 
+	      << ",Type: " << frame.type()
+              << ",Depth: " << frame.depth()
+	      << std::endl;
 
     // 检查实际分辨率
     if (frame.cols != width || frame.rows != height) {
@@ -56,7 +60,7 @@ int main(int argc, char* argv[]) {
     cv::Mat cropped_frame = frame(cv::Range(start_row, end_row + 1), cv::Range::all());
 
     // 输出指定行号区间的每个像素的坐标和 BGR 值
-    for (int y = start_row; y <= end_row; y++) {
+    /*for (int y = start_row; y <= end_row; y++) {
         std::cout << "行 " << y << ": ";
         for (int x = 0; x < frame.cols; x++) {
             cv::Vec3b pixel = frame.at<cv::Vec3b>(y, x);
@@ -69,7 +73,41 @@ int main(int argc, char* argv[]) {
                       << ", R=" << std::setw(3) << red << ") ";
         }
         std::cout << std::endl;
+    }*/
+    // 确保图像数据为单字节深度（例如，8位格式）
+    CV_Assert(frame.depth() == CV_8U);
+
+    // 获取图像行数和列数
+    int rows = frame.rows;
+    int cols = frame.cols;
+    int channels = frame.channels();
+
+    std::cout << "Frame size: " << rows << "x" << cols << ", Channels: " << channels << std::endl;
+
+    /*for (int i = start_row; i < end_row; ++i) {
+        const uchar* row_ptr = frame.ptr<uchar>(i); // 获取行指针
+        for (int j = 0; j < cols * channels; ++j) {
+            std::cout << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(row_ptr[j]) << " ";
+        }
+        std::cout << std::endl; // 每行结束后换行
+    }*/    
+for (int i = start_row; i < end_row; ++i) {
+    const uchar* row_ptr = frame.ptr<uchar>(i); // 获取行指针
+    std::cout << "Row " << i << ":" << std::endl; // 输出当前行索引
+    for (int j = 0; j < cols * channels; ++j) {
+        // 输出数组下标和对应值，使用制表符进行对齐
+        std::cout << "[" << std::setw(4) << (i * cols * channels + j) + 1 << "] "
+                  << std::hex << std::setw(2) << std::setfill('0') 
+                  << static_cast<int>(row_ptr[j]) << "\t";
+        
+	std::cout << std::dec;
+        // 每8个元素换行以便于查看
+        if ((j + 1) % 8 == 0) {
+            std::cout << std::endl;
+        }
     }
+    std::cout << std::endl; // 每行结束后换行
+}
 
     // 显示指定行区间的图像
     cv::imshow("Cropped Camera Frame", cropped_frame);
