@@ -1,120 +1,151 @@
-#include <opencv2/opencv.hpp>
 #include <iostream>
-#include <iomanip>
-#include <string>
+#include <fstream>
+#include <cstring>
+#include <cstdlib>
+#include <cstdio>
+#include <cerrno>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <linux/videodev2.h>
 
-int main(int argc, char* argv[]) {
-    // 检查基本命令行参数
-    if (argc < 4) {
-        std::cerr << "用法: " << argv[0] << " <设备名> <宽度> <高度> [起始行号] [结束行号]" << std::endl;
-        return -1;
-    }
+#define DEVICE "/dev/video0" // 默认相机设备
 
-    // 读取命令行参数
-    std::string device = argv[1];
-    int width = std::stoi(argv[2]);
-    int height = std::stoi(argv[3]);
-
-    // 可选行号区间参数
-    int start_row = 0;              // 默认起始行为0
-    int end_row = height - 1;       // 默认结束行为图像最大行号
-    if (argc >= 5) start_row = std::stoi(argv[4]);
-    if (argc >= 6) end_row = std::stoi(argv[5]);
-
-    // 检查行号区间是否有效
-    if (start_row < 0 || end_row >= height || start_row > end_row) {
-        std::cerr << "无效的行号区间: [" << start_row << ", " << end_row << "]" << std::endl;
-        return -1;
-    }
-
-    // 打开摄像头
-    cv::VideoCapture cap(device);
-    if (!cap.isOpened()) {
-        std::cerr << "无法打开摄像头: " << device << std::endl;
-        return -1;
-    }
-
-    // 设置分辨率
-    cap.set(cv::CAP_PROP_FRAME_WIDTH, width);
-    cap.set(cv::CAP_PROP_FRAME_HEIGHT, height);
-
-    // 读取一帧图像
-    cv::Mat frame;
-    if (!cap.read(frame)) {
-        std::cerr << "无法读取帧" << std::endl;
-        return -1;
-    }
-    std::cout << "Channels: " << frame.channels() 
-	      << ",Type: " << frame.type()
-              << ",Depth: " << frame.depth()
-	      << std::endl;
-
-    // 检查实际分辨率
-    if (frame.cols != width || frame.rows != height) {
-        std::cerr << "图像分辨率与期望值不匹配。当前分辨率为: "
-                  << frame.cols << "x" << frame.rows << std::endl;
-        return -1;
-    }
-
-    // 提取指定行号区间的图像部分
-    cv::Mat cropped_frame = frame(cv::Range(start_row, end_row + 1), cv::Range::all());
-
-    // 输出指定行号区间的每个像素的坐标和 BGR 值
-    /*for (int y = start_row; y <= end_row; y++) {
-        std::cout << "行 " << y << ": ";
-        for (int x = 0; x < frame.cols; x++) {
-            cv::Vec3b pixel = frame.at<cv::Vec3b>(y, x);
-            int blue = pixel[0];
-            int green = pixel[1];
-            int red = pixel[2];
-
-            std::cout << "(列 " << x << ": B=" << std::setw(3) << blue
-                      << ", G=" << std::setw(3) << green
-                      << ", R=" << std::setw(3) << red << ") ";
-        }
-        std::cout << std::endl;
-    }*/
-    // 确保图像数据为单字节深度（例如，8位格式）
-    CV_Assert(frame.depth() == CV_8U);
-
-    // 获取图像行数和列数
-    int rows = frame.rows;
-    int cols = frame.cols;
-    int channels = frame.channels();
-
-    std::cout << "Frame size: " << rows << "x" << cols << ", Channels: " << channels << std::endl;
-
-    /*for (int i = start_row; i < end_row; ++i) {
-        const uchar* row_ptr = frame.ptr<uchar>(i); // 获取行指针
-        for (int j = 0; j < cols * channels; ++j) {
-            std::cout << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(row_ptr[j]) << " ";
-        }
-        std::cout << std::endl; // 每行结束后换行
-    }*/    
-for (int i = start_row; i < end_row; ++i) {
-    const uchar* row_ptr = frame.ptr<uchar>(i); // 获取行指针
-    std::cout << "Row " << i << ":" << std::endl; // 输出当前行索引
-    for (int j = 0; j < cols * channels; ++j) {
-        // 输出数组下标和对应值，使用制表符进行对齐
-        std::cout << "[" << std::setw(4) << (i * cols * channels + j) + 1 << "] "
-                  << std::hex << std::setw(2) << std::setfill('0') 
-                  << static_cast<int>(row_ptr[j]) << "\t";
-        
-	std::cout << std::dec;
-        // 每8个元素换行以便于查看
-        if ((j + 1) % 8 == 0) {
-            std::cout << std::endl;
-        }
-    }
-    std::cout << std::endl; // 每行结束后换行
+// 输出错误信息并退出
+void perror_exit(const char *msg) {
+    perror(msg);
+    exit(EXIT_FAILURE);
 }
 
-    // 显示指定行区间的图像
-    cv::imshow("Cropped Camera Frame", cropped_frame);
-    cv::waitKey(0);  // 等待按键关闭窗口
+// 打开视频设备
+int open_device(const char *device) {
+    int fd = open(device, O_RDWR);
+    if (fd == -1) {
+        perror_exit("Error opening video device");
+    }
+    return fd;
+}
 
-    // 释放摄像头
-    cap.release();
-    return 0;
+// 设置视频格式与分辨率
+void set_video_format(int fd, uint32_t width, uint32_t height) {
+    struct v4l2_format fmt;
+    memset(&fmt, 0, sizeof(fmt));
+
+    fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    fmt.fmt.pix.width = width;
+    fmt.fmt.pix.height = height;
+    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_UYVY;  // 设置为 UYVY 422 格式
+    fmt.fmt.pix.field = V4L2_FIELD_NONE;
+
+    if (ioctl(fd, VIDIOC_S_FMT, &fmt) == -1) {
+        perror_exit("Error setting video format");
+    }
+
+    std::cout << "Format set to " << width << "x" << height << " UYVY 422\n";
+}
+
+// 请求缓冲区
+void request_buffers(int fd, struct v4l2_buffer &buffer, uint32_t &buffer_count) {
+    struct v4l2_requestbuffers req;
+    memset(&req, 0, sizeof(req));
+    req.count = 1;  // 请求一个缓冲区
+    req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    req.memory = V4L2_MEMORY_MMAP;
+
+    if (ioctl(fd, VIDIOC_REQBUFS, &req) == -1) {
+        perror_exit("Error requesting buffers");
+    }
+
+    // 查询缓冲区信息
+    memset(&buffer, 0, sizeof(buffer));
+    buffer.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    buffer.memory = V4L2_MEMORY_MMAP;
+    buffer.index = 0;
+
+    if (ioctl(fd, VIDIOC_QUERYBUF, &buffer) == -1) {
+        perror_exit("Error querying buffer");
+    }
+
+    buffer_count = buffer.length;
+}
+
+// 映射缓冲区
+void *map_buffer(int fd, const struct v4l2_buffer &buffer) {
+    void *buffer_start = mmap(NULL, buffer.length, PROT_READ | PROT_WRITE, MAP_SHARED, fd, buffer.m.offset);
+    if (buffer_start == MAP_FAILED) {
+        perror_exit("Error mapping buffer");
+    }
+    return buffer_start;
+}
+
+// 读取图像并以16进制输出（指定行范围并输出字节编号）
+void capture_and_output(int fd, struct v4l2_buffer &buffer, void *buffer_start, uint32_t start_row, uint32_t end_row, uint32_t width) {
+    if (ioctl(fd, VIDIOC_QBUF, &buffer) == -1) {
+        perror_exit("Error queueing buffer");
+    }
+
+    if (ioctl(fd, VIDIOC_STREAMON, &buffer.type) == -1) {
+        perror_exit("Error starting stream");
+    }
+
+    if (ioctl(fd, VIDIOC_DQBUF, &buffer) == -1) {
+        perror_exit("Error dequeuing buffer");
+    }
+
+    // 输出图像数据为16进制，按行输出，附加字节编号
+    uint8_t *data = static_cast<uint8_t *>(buffer_start);
+    uint32_t byte_position = 1;  // 字节位置从1开始
+
+    for (uint32_t row = start_row; row <= end_row; row++) {
+        uint32_t row_start_idx = row * width * 2;  // 每行的起始字节位置，UYVY每个像素2字节
+        uint32_t row_end_idx = row_start_idx + width * 2;
+
+        for (uint32_t i = row_start_idx; i < row_end_idx; i++) {
+            if (i % 16 == 0 && i != row_start_idx) std::cout << std::endl;
+            printf("[%04d] %02X ", byte_position++, data[i]);
+        }
+        std::cout << std::endl;
+    }
+
+    if (ioctl(fd, VIDIOC_STREAMOFF, &buffer.type) == -1) {
+        perror_exit("Error stopping stream");
+    }
+}
+
+int main(int argc, char *argv[]) {
+    if (argc != 6) {
+        std::cerr << "Usage: " << argv[0] << " <device> <width> <height> <start_row> <end_row>" << std::endl;
+        return EXIT_FAILURE;
+    }
+
+    const char *device = argv[1];
+    uint32_t width = std::stoi(argv[2]);
+    uint32_t height = std::stoi(argv[3]);
+    uint32_t start_row = std::stoi(argv[4]);
+    uint32_t end_row = std::stoi(argv[5]);
+
+    // 打开设备
+    int fd = open_device(device);
+
+    // 设置视频格式
+    set_video_format(fd, width, height);
+
+    // 请求缓冲区
+    struct v4l2_buffer buffer;
+    uint32_t buffer_count;
+    request_buffers(fd, buffer, buffer_count);
+
+    // 映射缓冲区
+    void *buffer_start = map_buffer(fd, buffer);
+
+    // 读取数据并以16进制输出，指定行范围和字节编号
+    capture_and_output(fd, buffer, buffer_start, start_row, end_row, width);
+
+    // 释放资源
+    munmap(buffer_start, buffer_count);
+    close(fd);
+
+    return EXIT_SUCCESS;
 }
 
