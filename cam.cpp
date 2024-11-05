@@ -9,8 +9,20 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <linux/videodev2.h>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <queue>
+#include <atomic>
 #include "ebd_data_type.h"
 #define DEVICE "/dev/video0" // 默认相机设备
+
+// 线程安全的队列
+std::queue<uint8_t *> data_queue;
+std::mutex queue_mutex;
+std::condition_variable data_cond;
+std::atomic<bool> running(true); // 控制线程是否继续运行
+
 
 // 输出错误信息并退出
 void perror_exit(const char *msg) {
@@ -81,7 +93,7 @@ void *map_buffer(int fd, const struct v4l2_buffer &buffer) {
 
 
 void print_lep_ebd(const lep_ebd_t &ebd) {
-    printf("------------ leopard imaging_ebd Information ------------\n");
+    printf("------------ Leopard imaging ebd Information ------------\n");
     
     // 打印每个结构体的字段
     printf("Size: %u\n", ebd.size.size);
@@ -113,6 +125,9 @@ void print_lep_ebd(const lep_ebd_t &ebd) {
     // 打印 sync_mode_e201_t
     printf("Sync Method: %u, Operation Mode: %u\n", ebd.sync_mode.method, ebd.sync_mode.op_mode);
 
+    printf("------------ Leopard imaging ebd Information ------------\n");
+
+
 }
 
 void to_ebd_data(uint8_t *p_data, lep_ebd_t *p_ebd) {
@@ -129,7 +144,7 @@ void to_ebd_data(uint8_t *p_data, lep_ebd_t *p_ebd) {
     print_lep_ebd(*p_ebd);
 }
 
-
+/*
 // 读取图像并以16进制输出（指定行范围并输出字节编号）
 void capture_and_output(int fd, struct v4l2_buffer &buffer, void *buffer_start, size_t fram_count) {
     if (ioctl(fd, VIDIOC_QBUF, &buffer) == -1) {
@@ -174,6 +189,84 @@ void capture_and_output(int fd, struct v4l2_buffer &buffer, void *buffer_start, 
     if (ioctl(fd, VIDIOC_STREAMOFF, &buffer.type) == -1) {
         perror_exit("Error stopping stream");
     }
+}*/
+
+// 输出线程
+void print_thread_func() {
+    while (running) {
+        std::unique_lock<std::mutex> lock(queue_mutex);
+        data_cond.wait(lock, [] { return !data_queue.empty() || !running.load(); });
+
+        if (!data_queue.empty()) {
+            uint8_t *data = data_queue.front();
+            data_queue.pop();
+
+            lep_ebd_t ebd = {0};
+            to_ebd_data(data, &ebd); // 解析数据到 ebd
+            
+	    printf("------------ Leopard imaging hex Information ------------\n");
+
+            // 打印前600个字节的数据
+            uint32_t byte_position = 1;
+            for (uint32_t i = 0; i < 600; ++i) {
+                printf("[%03d] %.2X ", byte_position++, data[i]);
+                if (byte_position % 16 == 1) {
+                    printf("\n");
+                }
+            }
+            if (byte_position % 16 != 1) {
+                printf("\n");
+            }
+
+            printf("------------ Leopard imaging ebd hex Information ------------\n");
+
+
+            // 在此你可以选择将数据写入文件
+        }
+    }
+}
+
+
+void capture_and_output(int fd, struct v4l2_buffer &buffer, void *buffer_start, size_t frame_count) {
+    for (uint32_t frame_num = 0; frame_num < frame_count; ++frame_num) {
+        // 重新排队缓冲区
+        if (ioctl(fd, VIDIOC_QBUF, &buffer) == -1) {
+            perror("Error queueing buffer");
+            break;
+        }
+
+        // 开始流
+        if (ioctl(fd, VIDIOC_STREAMON, &buffer.type) == -1) {
+            perror("Error starting stream");
+            break;
+        }
+
+        // 等待并获取新的帧
+        if (ioctl(fd, VIDIOC_DQBUF, &buffer) == -1) {
+            perror("Error dequeuing buffer");
+            break;
+        }
+
+        uint8_t *data = static_cast<uint8_t *>(buffer_start);
+
+        // 将读取的600字节数据放入队列
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex);
+            uint8_t *frame_data = new uint8_t[600]; // 分配600字节空间
+            std::memcpy(frame_data, data, 600);    // 复制前600字节数据
+            data_queue.push(frame_data);            // 将数据推入队列
+        }
+
+        data_cond.notify_one(); // 唤醒输出线程进行输出
+    }
+
+    // 读取完指定帧数后，停止流
+    if (ioctl(fd, VIDIOC_STREAMOFF, &buffer.type) == -1) {
+        perror("Error stopping stream");
+    }
+
+    // 此处释放资源或进行其他操作
+    std::cout << "Captured " << frame_count << " frames. Stopping stream." << std::endl;
 }
 
 int main(int argc, char *argv[]) {
@@ -201,9 +294,18 @@ int main(int argc, char *argv[]) {
     // 映射缓冲区
     void *buffer_start = map_buffer(fd, buffer);
 
-    lep_ebd_t ebd_obj = { 0 };
+    //lep_ebd_t ebd_obj = { 0 };
+
+    std::thread print_thread(print_thread_func);
+
     // 读取数据并以16进制输出，指定行范围和字节编号
     capture_and_output(fd, buffer, buffer_start, frame_count_max);
+
+    // 停止输出线程
+    running.store(false);
+    data_cond.notify_all();
+    print_thread.join();
+    
     // 释放资源
     munmap(buffer_start, buffer_count);
     close(fd);
