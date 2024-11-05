@@ -16,6 +16,7 @@
 #include <atomic>
 #include "ebd_data_type.h"
 #define DEVICE "/dev/video0" // 默认相机设备
+//g++ -std=c++11 -lstdc++ cam.cpp -o cam.elf  -pthread
 
 // 线程安全的队列
 std::queue<uint8_t *> data_queue;
@@ -98,6 +99,9 @@ void print_lep_ebd(const lep_ebd_t &ebd) {
     // 打印每个结构体的字段
     printf("Size: %u\n", ebd.size.size);
 
+    printf("Head CRC : %.8x\n", ebd.head_crc.crc);
+
+
     // 打印 prv_inf_e13_t
     printf("Chip ID : %u\n", ebd.indiv_inf.chip_id_e13);
 
@@ -107,8 +111,16 @@ void print_lep_ebd(const lep_ebd_t &ebd) {
     // 打印 framer_id_e41_t
     printf("Framer ID: %u\n", ebd.frame_id.framer_id);
 
+    printf("Exposure SP1: %.2x%.2x%.2x, SP2: %.2x%.2x%.2x\n", ebd.exposure.sp1[2], ebd.exposure.sp1[1], ebd.exposure.sp1[0], 
+		    ebd.exposure.sp2[2],  ebd.exposure.sp2[1],  ebd.exposure.sp2[0]);
+
+
     // 打印 lep_temp_e53_t
     printf("Temperature 1: %f, Temperature 2: %f\n", (ebd.temper.temp1&0xfff)/16.0 - 50, (ebd.temper.temp2&0xfff)/16.0 - 50);
+
+    // 打印 
+    printf("Adjustment level Determined: %d\n", ebd.compensation.level);
+
 
     // 打印 lep_err_e61_t
     printf("Error Code E61: %.8x, Error Code E66: %.2x\n", ebd.err_code.code_e61, ebd.err_code.code_e66);
@@ -125,6 +137,9 @@ void print_lep_ebd(const lep_ebd_t &ebd) {
     // 打印 sync_mode_e201_t
     printf("Sync Method: %u, Operation Mode: %u\n", ebd.sync_mode.method, ebd.sync_mode.op_mode);
 
+    printf("White balance cf0: %u, cf1: %u cf2: %u, cf3: %u\n", ebd.white_banlance.cf0, ebd.white_banlance.cf1, ebd.white_banlance.cf2, ebd.white_banlance.cf3);
+    
+
     printf("------------ Leopard imaging ebd Information ------------\n");
 
 
@@ -132,15 +147,20 @@ void print_lep_ebd(const lep_ebd_t &ebd) {
 
 void to_ebd_data(uint8_t *p_data, lep_ebd_t *p_ebd) {
     memcpy(&p_ebd->size, p_data + EBD_SIZE - 1, sizeof(p_ebd->size));
+    memcpy(&p_ebd->head_crc, p_data + HEAD_CRC - 1, sizeof(p_ebd->head_crc));
     memcpy(&p_ebd->indiv_inf, p_data + INDIVIDUAL_INF - 1, sizeof(p_ebd->indiv_inf));
+    memcpy(&p_ebd->exposure, p_data + EXPOSURE_SP1 - 1, sizeof(p_ebd->exposure));
     memcpy(&p_ebd->frame_count, p_data + FRAME_COUNT - 1, sizeof(p_ebd->frame_count));
     memcpy(&p_ebd->frame_id, p_data + FRAME_ID - 1, sizeof(p_ebd->frame_id));
     memcpy(&p_ebd->temper, p_data + TEMPERATURE_INF - 1, sizeof(p_ebd->temper));   
+    memcpy(&p_ebd->compensation, p_data + COMPENSATION_LEVEL - 1, sizeof(p_ebd->compensation));
     memcpy(&p_ebd->err_code, p_data + ERR_CODE - 1, sizeof(p_ebd->err_code));  
     memcpy(&p_ebd->vol, p_data + VOL - 1, sizeof(p_ebd->vol));        
     memcpy(&p_ebd->img_size, p_data + IMAGE_SIZE - 1, sizeof(p_ebd->img_size));        
     memcpy(&p_ebd->drive_mode, p_data + DRIVE_MODE - 1, sizeof(p_ebd->drive_mode));     
     memcpy(&p_ebd->sync_mode, p_data + SYNC_MODE - 1, sizeof(p_ebd->sync_mode));                          
+    memcpy(&p_ebd->white_banlance, p_data + WHITE_BALANCE_INF - 1, sizeof(p_ebd->white_banlance));
+
     print_lep_ebd(*p_ebd);
 }
 
