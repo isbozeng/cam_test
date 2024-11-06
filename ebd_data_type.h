@@ -23,7 +23,7 @@ typedef enum {
     SYNC_MODE = 201,
     WHITE_BALANCE_INF = 249,
 }LEP_EBD_IDX_t;
-
+#pragma pack (1)
 typedef struct {
   uint16_t size;
 }ebd_size_e01_t;
@@ -120,6 +120,6 @@ typedef struct {
     sync_mode_e201_t sync_mode;
     white_balance_e249_t white_banlance;
 }lep_ebd_t;
-
+#pragma pack()
 
 #endif
